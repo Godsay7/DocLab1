@@ -32,18 +32,18 @@ sequenceDiagram
   participant RT as Realtime Service
   participant B as User B
 
-  A->>Client: Змінює текст повідомлення
+  A->>Client: Changes the message text
   Client->>API: PUT /messages/{id} (new_text)
   API->>Msg: editMessage(id, new_text, user_id)
   
-  Msg->>AS: Перевірка автора та обмежень по часу
-  Msg->>Audit: Збереження старого тексту (INSERT)
-  Msg->>DB: Оновлення тексту та is_edited=true (UPDATE)
+  Msg->>AS: Author and time limit verification
+  Msg->>Audit: Keeping old text (INSERT)
+  Msg->>DB: Text updates and is_edited=true (UPDATE)
   
   Msg->>RT: Publish event "message_edited"
   API-->>Client: 200 OK
   
-  RT-->>B: Event "message_edited" (якщо онлайн)
+  RT-->>B: Event "message_edited" (if online)
 ```
 
 ### Part 3 — State Diagram
@@ -52,7 +52,7 @@ sequenceDiagram
 stateDiagram-v2
   [*] --> Active
   
-  state "Повідомлення живе (Active)" as Active {
+  state "Message is alive (Active)" as Active {
     [*] --> Sent
     Sent --> Delivered
     Delivered --> Read
@@ -69,23 +69,24 @@ stateDiagram-v2
 ### Part 4 — ADR (Architecture Decision Record)
 
 ```markdown
-# ADR-001: Стратегія збереження відредагованих повідомлень (Mutable State + Audit Log)
+# ADR-001: Strategy for saving edited messages (Mutable State + Audit Log)
 
 ## Status
 Accepted
 
 ## Context
-Користувачам потрібно мати можливість редагувати надіслані повідомлення. Однак, з міркувань безпеки та модерації, система повинна зберігати оригінальний текст повідомлення (Audit trail). Клієнтські додатки потребують швидкого завантаження історії повідомлення без складних обчислень.
+Users should be able to edit sent messages. However, for security and moderation reasons, the system should retain the original message text. (Audit trail). 
+Client applications need to load message history quickly without complex calculations.
 
 ## Decision
-Для таблиці `Messages` використовувати мутабельний підхід: при редагуванні запис оновлюється новим текстом (UPDATE) і встановлюється прапорець `is_edited = true`. Старі версії повідомлень зберігаються у вигляді незмінних записів (append-only) у додатковій таблиці `Message_Audit_Log`.
+For the `Messages` table, use a mutable approach: when editing, the record is updated with new text (UPDATE) and the `is_edited = true` flag is set. Old versions of messages are stored as immutable records (append-only) in the additional `Message_Audit_Log` table.
 
 ## Alternatives
-- **Event Sourcing (Тільки Immutable)**: Усі повідомлення та їх зміни зберігаються як події. Клієнт або бекенд мають "склеювати" фінальний стан. (Відхилено: занадто складно для читання великих історій чату, падає продуктивність).
-- **Soft-delete і створення нового ID**: При редагуванні старе повідомлення позначається видаленим, і створюється нове з новим ID. (Відхилено: ламає ланцюжки відповідей - "replies", які посилаються на оригінальний ID).
+- **Event Sourcing (Immutable only)**: All messages and their changes are stored as events. The client or backend must "glue" the final state. (Deprecated: too difficult to read large chat histories, performance drops).
+- **Soft-delete and create new ID**: When editing, the old message is marked as deleted, and a new one is created with the new ID. (Deprecated: breaks the threads of replies that refer to the original ID).
 
 ## Consequences
-+ **Швидкість читання**: Клієнти швидко отримують актуальний стан чату з однієї таблиці без додаткових JOIN-ів.
-+ **Можливість аудиту**: Повна історія змін безпечно зберігається для потреб підтримки/модерації.
-- **Складність запису**: Кожне редагування вимагає двох операцій запису у базу даних у рамках однієї транзакції (оновлення `Messages` + вставка в `Message_Audit_Log`).
++ **Read Speed**: Clients quickly get the current chat state from a single table without additional JOINs.
++ **Auditability**: Full change history is securely stored for support/moderation purposes.
+- **Write Complexity**: Each edit requires two database writes within a single transaction (update `Messages` + insert into `Message_Audit_Log`).
 ```
